@@ -3,6 +3,15 @@ import settings
 
 from aiogram import Bot, Dispatcher, executor, types
 
+try:
+    import Image
+except ImportError:
+    from PIL import Image
+
+from io import BytesIO
+
+import pytesseract
+
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=settings.token)
@@ -23,6 +32,23 @@ async def echo(message: types.Message):
     # await bot.send_message(message.chat.id, message.text)
 
     await message.answer(message.text)
+
+
+@dp.message_handler(content_types=['photo', 'document', 'sticker'])
+async def photo_recieved(message: types.Message):
+    if len(message.photo):
+        photo = message.photo[-1]
+    elif message.document:
+        photo = message.document
+    elif message.sticker:
+        photo = message.sticker
+
+    bio = BytesIO()
+    await photo.download(bio)
+    img = Image.open(bio)
+    print(img.format)
+
+    await message.answer("Фото добавлено")
 
 
 def main():
