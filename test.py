@@ -32,13 +32,24 @@ def ocr(filename):
         text = pytesseract.image_to_string(gray, lang='rus')
         print(text)
         print("------------------")
-        # img.thumbnail((512, 512))
+        thumb = thumbnail_img(img)
 
-        cv2.imwrite(os.path.join('download', 'res', filename), gray)
+        cv2.imwrite(os.path.join('download', 'res', filename), thumb)
 
     except Exception as e:
         print(e)
 
+
+def thumbnail_img(img):
+    max_size = 512
+    (h, w, _) = img.shape
+    if h > max_size or w > max_size:
+        (wR, hR) = (max_size / n for n in (w, h))
+        r = min(wR, hR)
+        new_size = tuple(int(n * r) for n in (w, h))
+        img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+    return img
 
 def main():
     filenames = next(walk("./download"), (None, None, []))[2]

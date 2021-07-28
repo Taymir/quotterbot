@@ -3,11 +3,6 @@ import settings
 
 from aiogram import Bot, Dispatcher, executor, types
 
-try:
-    import Image
-except ImportError:
-    from PIL import Image
-
 import cv2
 import numpy as np
 
@@ -48,33 +43,47 @@ async def photo_recieved(message: types.Message):
 
     bio = BytesIO()
     await photo.download(bio)
-    #img = Image.open(bio)
-    #img2 = cv2.imread(bio)
     file_bytes = np.asarray(bytearray(bio.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_ANYCOLOR)
-    gray = img
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    gray = cv2.resize(gray, (0, 0), fx=4, fy=4)
+    text = ocr_img(img)
+    thumb = thumbnail_img(img)
+    #save as sticker
 
-    #gray, img_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    #gray = cv2.bitwise_not(img_bin)
-    #kernel = np.ones((2, 1), np.uint8)
-    #img = cv2.erode(gray, kernel, iterations=1)
-    #img = cv2.dilate(img, kernel, iterations=1)
-    #img = img_binkernel = np.ones((5,5),np.uint8)
-    #kernel = np.ones((5, 5), np.uint8)
-    #gray = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
-
-    gray, img_bin = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY)
-    gray = cv2.bitwise_not(img_bin)
-
-    text = pytesseract.image_to_string(gray, lang='rus+eng')
 
     #img.thumbnail((512, 512))
     cv2.imwrite('download/file.png', gray)
     #img.save('download/file.png')
 
     await message.answer("Текст: " + text)
+
+
+def thumbnail_img(img):
+    max_size = 512
+    (h, w, _) = img.shape
+    if h > max_size or w > max_size:
+        (wR, hR) = (max_size / n for n in (w, h))
+        r = min(wR, hR)
+        new_size = (int(n * r) for n in (w, h))
+
+        img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+
+    return img
+
+
+def ocr_img(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, (0, 0), fx=3, fy=3)
+
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    gray = cv2.bitwise_not(thresh)
+    average = gray.mean(axis=0).mean(axis=0)
+    if average < 100:
+        gray = cv2.bitwise_not(gray)
+
+    text = pytesseract.image_to_string(gray, lang='rus')
+    return text
 
 
 def main():
