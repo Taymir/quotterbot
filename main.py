@@ -46,26 +46,43 @@ async def photo_recieved(message: types.Message):
     file_bytes = np.asarray(bytearray(bio.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_ANYCOLOR)
     text = ocr_img(img)
+    print(text)
     thumb = thumbnail_img(img)
-    #save as sticker
+    is_success, buffer = cv2.imencode(".webp", thumb, [cv2.IMWRITE_WEBP_QUALITY, 100])
+    thumb = BytesIO(buffer)
 
+    file = types.input_file.InputFile(thumb, filename="quote.webp")
+    sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
+    print(sticker.file_id)
 
+    #res = await bot.create_new_sticker_set(user_id=message.from_user.id, name='quotes_by_quotterbot',
+    #                                       title='Quotes', png_sticker=sticker.file_id, emojis=u'\U000026C4')
+    res = await bot.add_sticker_to_set(user_id=message.from_user.id, name='quotes_by_quotterbot',
+                                           png_sticker=sticker.file_id, emojis=u'\U000026C4')
+    print(res)
+    sticker_set = await bot.get_sticker_set(name='quotes_by_quotterbot')
+    print(sticker_set)
+
+    #await bot.send_sticker(chat_id=message.from_user.id, sticker=sticker.file_id)
+    await message.answer_sticker(sticker_set.stickers[-1].file_id)
+    #await bot.send_sticker(chat_id=message.from_user.id, sticker="CAACAgIAAxkBAAECmAlg807JU13P-DO7gjUEaMx5tz-9pAACEwAD8vr4C5NCBfcWVIQhIAQ")
     #img.thumbnail((512, 512))
-    cv2.imwrite('download/file.png', gray)
+    #cv2.imwrite('download/file.png', gray)
     #img.save('download/file.png')
 
-    await message.answer("Текст: " + text)
+    #await message.answer("Текст: " + text)
 
 
 def thumbnail_img(img):
     max_size = 512
     (h, w, _) = img.shape
-    if h > max_size or w > max_size:
-        (wR, hR) = (max_size / n for n in (w, h))
-        r = min(wR, hR)
-        new_size = (int(n * r) for n in (w, h))
 
-        img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+    (wR, hR) = (max_size / n for n in (w, h))
+    r = min(wR, hR)
+    new_size = tuple(int(round(n * r)) for n in (w, h))
+    print(new_size)
+
+    img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
 
     return img
 
