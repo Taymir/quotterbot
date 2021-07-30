@@ -1,4 +1,7 @@
 import logging
+
+import aiogram.utils.exceptions
+
 import settings
 
 from aiogram import Bot, Dispatcher, executor, types
@@ -10,31 +13,44 @@ from io import BytesIO
 
 import pytesseract
 
+import pymongo, pymongo.errors
+
+
+bot_name = "quotterbot"
+bot_postfix = "_by_" + bot_name
+default_emoji = u'\U00002b50'
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=settings.token)
 dp = Dispatcher(bot)
 
+client = pymongo.MongoClient(host=settings.mongodb['host'], port=settings.mongodb['port'],
+                             username=settings.mongodb['username'], password=settings.mongodb['password'],
+                             tls=settings.mongodb['tls'])
+db = client.quotterbot
 
-@dp.message_handler(commands=['start', 'help'])
+
+@dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
-    """
-    This handler will be called when user sends `/start` or `/help` command
-    """
-    await message.reply("Hi!\nI'm EchoBot!\nPowered by aiogram.")
-    #TODO: On start, add user to DB
+    found_user = db.users.find_one({'user_id': message.from_user.id})
+    if not found_user:
+        db.users.insert_one({'user_id': message.from_user.id,
+                             'first_name': message.from_user.first_name,
+                             'username': message.from_user.username,
+                             'language_code': message.from_user.language_code,
+                             'stickerset': None
+                             })
 
-
-#@dp.message_handler()
-async def echo(message: types.Message):
-    # old style:
-    # await bot.send_message(message.chat.id, message.text)
-
-    await message.answer(message.text)
+    await message.reply("Welcome to quotterBot!")
 
 
 @dp.message_handler(content_types=['photo', 'document', 'sticker'])
 async def photo_recieved(message: types.Message):
+    stickerset = db.users.find_one({"user_id": message.from_user.id})
+    if not stickerset or not stickerset['stickerset']:
+        return await message.reply("Ошибка. Перед загрузкой изображения, создайте стикер-пак командой /new")
+    stickerset = stickerset['stickerset']
+
     if len(message.photo):
         photo = message.photo[-1]
     elif message.document:
@@ -54,49 +70,56 @@ async def photo_recieved(message: types.Message):
 
     file = types.input_file.InputFile(thumb, filename="quote.webp")
     sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
-    print(sticker.file_id)
 
-    res = await bot.add_sticker_to_set(user_id=message.from_user.id, name='quotes_by_quotterbot',
-                                       png_sticker=sticker.file_id, emojis=u'\U00002b50')
-    print(res)
-    sticker_set = await bot.get_sticker_set(name='quotes_by_quotterbot')
-    print(sticker_set)
-    #todo: добавить стикер в текущий стикерпак юзера.
-    #Если пака нет, вывести ошибку
+    res = await bot.add_sticker_to_set(user_id=message.from_user.id, name=stickerset,
+                                       png_sticker=sticker.file_id, emojis=default_emoji)
+    sticker_set = await bot.get_sticker_set(name=stickerset)
+    sticker = sticker_set.stickers[-1].file_id
+    db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker, "text": text})
+    await message.answer_sticker(sticker)
 
-    await message.answer_sticker(sticker_set.stickers[-1].file_id)
-
-@dp.message_handler(commands=['pack'])
-async def get_stickerpack(message: types.Message):
-    sticker_set = await bot.get_sticker_set(name='FreeFlyQuotes')
-
-    await message.answer_sticker(sticker_set.stickers[-1].file_id)
-    await message.reply("http://t.me/addstickers/FreeFlyQuotes")
 
 @dp.message_handler(commands=['new'])
-async def create_stickerpack(message: types.Message):
+async def create_stickerset(message: types.Message):
     params = message.text.split(" ")
     if len(params) > 1:
-        await message.reply("TODO: Обработка команды для создания стикерпака")
-        #Todo: Запросить name и title (?), сохранить пак с пустым стикером?
-        #сохранить в бд текущий стикерсет для юзера
+        name = params[1]
+        if not name.endswith(bot_postfix):
+            name += bot_postfix
+        title = name
+        if len(params) > 2:
+            title = params[2]
+
+        file = types.input_file.InputFile('./download/logo.png')
+        sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
+        try:
+            await bot.create_new_sticker_set(message.from_user.id, name, title, emojis=default_emoji, png_sticker=sticker.file_id)
+        except Exception as e:
+            return await message.reply(str(e))
+
+        db.users.update_one({"user_id": message.from_user.id}, {"$set": {"stickerset": name}})
+        await message.reply("http://t.me/addstickers/" + name)
     else:
         await message.reply("TODO: вывод кнопок для создания стикерпака")
 
 
-@dp.message_handler(commands=['load'])#Todo: переименовать в use?
-async def load_stickerpack(message: types.Message):
+@dp.message_handler(commands=['use'])
+async def use_stickerset(message: types.Message):
     params = message.text.split(" ")
     if len(params) > 1:
         stickerset_name = params[1]
 
-        if not stickerset_name.endswith("by_quotterbot"):
-            return await message.reply("Ошибка: стикерпак должен заканчиваться на \"by_quotterbot\"")
+        if not stickerset_name.endswith(bot_postfix):
+            return await message.reply(f"Ошибка: стикерпак должен заканчиваться на \"{bot_postfix}\"")
 
         sticker_set = await bot.get_sticker_set(name=stickerset_name)
-        await message.reply("http://t.me/addstickers/" + stickerset_name)
-        await message.answer_sticker(sticker_set.stickers[-1].file_id)
-        #TODO: Добавить в БД, что user_id использует данный стикер-сет
+
+        try:
+            db.uses.insert_one({"user_id": message.from_user.id, "stickerset": stickerset_name})
+        except pymongo.errors.DuplicateKeyError:
+            await message.reply("Вами уже был подключен стикерпак: http://t.me/addstickers/" + stickerset_name)
+        else:
+            await message.reply("Вы подключили стикерпак: http://t.me/addstickers/" + stickerset_name)
     else:
         await message.reply("TODO: вывод кнопок для использования стикерпака")
 
