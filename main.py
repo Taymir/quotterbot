@@ -22,9 +22,10 @@ async def send_welcome(message: types.Message):
     This handler will be called when user sends `/start` or `/help` command
     """
     await message.reply("Hi!\nI'm EchoBot!\nPowered by aiogram.")
+    #TODO: On start, add user to DB
 
 
-@dp.message_handler()
+#@dp.message_handler()
 async def echo(message: types.Message):
     # old style:
     # await bot.send_message(message.chat.id, message.text)
@@ -55,23 +56,58 @@ async def photo_recieved(message: types.Message):
     sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
     print(sticker.file_id)
 
-    #res = await bot.create_new_sticker_set(user_id=message.from_user.id, name='quotes_by_quotterbot',
-    #                                       title='Quotes', png_sticker=sticker.file_id, emojis=u'\U000026C4')
     res = await bot.add_sticker_to_set(user_id=message.from_user.id, name='quotes_by_quotterbot',
-                                           png_sticker=sticker.file_id, emojis=u'\U000026C4')
+                                       png_sticker=sticker.file_id, emojis=u'\U00002b50')
     print(res)
     sticker_set = await bot.get_sticker_set(name='quotes_by_quotterbot')
     print(sticker_set)
+    #todo: добавить стикер в текущий стикерпак юзера.
+    #Если пака нет, вывести ошибку
 
-    #await bot.send_sticker(chat_id=message.from_user.id, sticker=sticker.file_id)
     await message.answer_sticker(sticker_set.stickers[-1].file_id)
-    #await bot.send_sticker(chat_id=message.from_user.id, sticker="CAACAgIAAxkBAAECmAlg807JU13P-DO7gjUEaMx5tz-9pAACEwAD8vr4C5NCBfcWVIQhIAQ")
-    #img.thumbnail((512, 512))
-    #cv2.imwrite('download/file.png', gray)
-    #img.save('download/file.png')
 
-    #await message.answer("Текст: " + text)
+@dp.message_handler(commands=['pack'])
+async def get_stickerpack(message: types.Message):
+    sticker_set = await bot.get_sticker_set(name='FreeFlyQuotes')
 
+    await message.answer_sticker(sticker_set.stickers[-1].file_id)
+    await message.reply("http://t.me/addstickers/FreeFlyQuotes")
+
+@dp.message_handler(commands=['new'])
+async def create_stickerpack(message: types.Message):
+    params = message.text.split(" ")
+    if len(params) > 1:
+        await message.reply("TODO: Обработка команды для создания стикерпака")
+        #Todo: Запросить name и title (?), сохранить пак с пустым стикером?
+        #сохранить в бд текущий стикерсет для юзера
+    else:
+        await message.reply("TODO: вывод кнопок для создания стикерпака")
+
+
+@dp.message_handler(commands=['load'])#Todo: переименовать в use?
+async def load_stickerpack(message: types.Message):
+    params = message.text.split(" ")
+    if len(params) > 1:
+        stickerset_name = params[1]
+
+        if not stickerset_name.endswith("by_quotterbot"):
+            return await message.reply("Ошибка: стикерпак должен заканчиваться на \"by_quotterbot\"")
+
+        sticker_set = await bot.get_sticker_set(name=stickerset_name)
+        await message.reply("http://t.me/addstickers/" + stickerset_name)
+        await message.answer_sticker(sticker_set.stickers[-1].file_id)
+        #TODO: Добавить в БД, что user_id использует данный стикер-сет
+    else:
+        await message.reply("TODO: вывод кнопок для использования стикерпака")
+
+@dp.message_handler(commands=['test'])
+async def test_function(message: types.Message):
+    markup = types.reply_keyboard.ReplyKeyboardMarkup([
+        [types.reply_keyboard.KeyboardButton("Option 1")],
+        [types.reply_keyboard.KeyboardButton("Option 2")],
+        [types.reply_keyboard.KeyboardButton("Option 3")]
+    ])
+    await message.reply("Ок, выберите пункт меню", reply_markup=markup)
 
 def thumbnail_img(img):
     max_size = 512
@@ -80,7 +116,6 @@ def thumbnail_img(img):
     (wR, hR) = (max_size / n for n in (w, h))
     r = min(wR, hR)
     new_size = tuple(int(round(n * r)) for n in (w, h))
-    print(new_size)
 
     img = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
 
