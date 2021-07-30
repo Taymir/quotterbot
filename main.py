@@ -1,18 +1,12 @@
 import logging
-
-import aiogram.utils.exceptions
-
+import typing
 import settings
-
 from aiogram import Bot, Dispatcher, executor, types
-
+from aiogram.utils.callback_data import CallbackData
 import cv2
 import numpy as np
-
 from io import BytesIO
-
 import pytesseract
-
 import pymongo, pymongo.errors
 
 
@@ -28,6 +22,8 @@ client = pymongo.MongoClient(host=settings.mongodb['host'], port=settings.mongod
                              username=settings.mongodb['username'], password=settings.mongodb['password'],
                              tls=settings.mongodb['tls'])
 db = client.quotterbot
+
+cb_stickers = CallbackData('sticker', 'sticker', 'action')
 
 
 @dp.message_handler(commands=['start'])
@@ -68,7 +64,7 @@ async def photo_recieved(message: types.Message):
     is_success, buffer = cv2.imencode(".webp", thumb, [cv2.IMWRITE_WEBP_QUALITY, 100])
     thumb = BytesIO(buffer)
 
-    file = types.input_file.InputFile(thumb, filename="quote.webp")
+    file = types.input_file.InputFile(thumb, filename="quote.webp") #TODO: Ошибка при работе с прозрачностью!
     sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
 
     res = await bot.add_sticker_to_set(user_id=message.from_user.id, name=stickerset,
@@ -76,7 +72,25 @@ async def photo_recieved(message: types.Message):
     sticker_set = await bot.get_sticker_set(name=stickerset)
     sticker = sticker_set.stickers[-1].file_id
     db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker, "text": text})
-    await message.answer_sticker(sticker)
+
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        types.InlineKeyboardButton('DEL', callback_data=cb_stickers.new(sticker=sticker, action='del')),
+        types.InlineKeyboardButton('EDIT', callback_data=cb_stickers.new(sticker=sticker, action='edit'))
+    )
+
+    await message.answer_sticker(sticker, reply_markup=markup)
+
+
+@dp.callback_query_handler(cb_stickers.filter(action='del'))
+async def sticker_del(query: types.CallbackQuery, callback_data: typing.Dict[str, str]):
+    await query.message.reply('edit sticker: ' + callback_data['sticker'])
+
+
+@dp.callback_query_handler(cb_stickers.filter(action='edit'))
+async def sticker_edit(query: types.CallbackQuery, callback_data: typing.Dict[str, str]):
+    await query.message.reply('delete sticker: ' + callback_data['sticker'])
 
 
 @dp.message_handler(commands=['new'])
@@ -130,7 +144,8 @@ async def test_function(message: types.Message):
         [types.reply_keyboard.KeyboardButton("Option 2")],
         [types.reply_keyboard.KeyboardButton("Option 3")]
     ])
-    await message.reply("Ок, выберите пункт меню", reply_markup=markup)
+    markup = types.reply_keyboard.ReplyKeyboardRemove()
+    await message.reply("Меню убрано", reply_markup=markup)
 
 def thumbnail_img(img):
     max_size = 512
