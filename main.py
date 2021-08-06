@@ -57,7 +57,7 @@ async def photo_recieved(message: types.Message):
     bio = BytesIO()
     await photo.download(bio)
     file_bytes = np.asarray(bytearray(bio.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_ANYCOLOR)
+    img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
     text = ocr_img(img)
     print(text)
     thumb = thumbnail_img(img)
@@ -73,14 +73,14 @@ async def photo_recieved(message: types.Message):
     sticker = sticker_set.stickers[-1].file_id
     db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker, "text": text})
 
+    #markup = types.InlineKeyboardMarkup(row_width=2)
+    #markup.row(
+    #    types.InlineKeyboardButton('DEL', callback_data=cb_stickers.new(sticker=sticker, action='del')),
+    #    types.InlineKeyboardButton('EDIT', callback_data=cb_stickers.new(sticker=sticker, action='edit'))
+    #)
 
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton('DEL', callback_data=cb_stickers.new(sticker=sticker, action='del')),
-        types.InlineKeyboardButton('EDIT', callback_data=cb_stickers.new(sticker=sticker, action='edit'))
-    )
-
-    await message.answer_sticker(sticker, reply_markup=markup)
+    #await message.answer_sticker(sticker, reply_markup=markup)
+    await message.answer_sticker(sticker)
 
 
 @dp.callback_query_handler(cb_stickers.filter(action='del'))
@@ -137,6 +137,7 @@ async def use_stickerset(message: types.Message):
     else:
         await message.reply("TODO: вывод кнопок для использования стикерпака")
 
+
 @dp.message_handler(commands=['test'])
 async def test_function(message: types.Message):
     markup = types.reply_keyboard.ReplyKeyboardMarkup([
@@ -147,9 +148,14 @@ async def test_function(message: types.Message):
     markup = types.reply_keyboard.ReplyKeyboardRemove()
     await message.reply("Меню убрано", reply_markup=markup)
 
+
 def thumbnail_img(img):
     max_size = 512
     (h, w, _) = img.shape
+
+    if (w <= max_size and h <= max_size) and (w == max_size or h == max_size):
+        # no need to resize
+        return img
 
     (wR, hR) = (max_size / n for n in (w, h))
     r = min(wR, hR)
