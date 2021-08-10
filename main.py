@@ -3,11 +3,20 @@ import typing
 import settings
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils.callback_data import CallbackData
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters import Text
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import InlineQuery, \
+    InputTextMessageContent, InlineQueryResultArticle, InlineQueryResultCachedSticker
 import cv2
 import numpy as np
 from io import BytesIO
 import pytesseract
 import pymongo, pymongo.errors
+from bson.objectid import ObjectId
+import html
+import hashlib
 
 
 bot_name = "quotterbot"
@@ -16,14 +25,20 @@ default_emoji = u'\U00002b50'
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=settings.token)
-dp = Dispatcher(bot)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+
+
+class States(StatesGroup):
+    editText = State()
+
 
 client = pymongo.MongoClient(host=settings.mongodb['host'], port=settings.mongodb['port'],
                              username=settings.mongodb['username'], password=settings.mongodb['password'],
                              tls=settings.mongodb['tls'])
 db = client.quotterbot
 
-cb_stickers = CallbackData('sticker', 'sticker', 'action')
+cb_stickers = CallbackData('sticker', 'id', 'action')
 
 
 @dp.message_handler(commands=['start'])
@@ -64,33 +79,65 @@ async def photo_recieved(message: types.Message):
     is_success, buffer = cv2.imencode(".webp", thumb, [cv2.IMWRITE_WEBP_QUALITY, 100])
     thumb = BytesIO(buffer)
 
-    file = types.input_file.InputFile(thumb, filename="quote.webp") #TODO: Ошибка при работе с прозрачностью!
+    file = types.input_file.InputFile(thumb, filename="quote.webp")
     sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
 
     res = await bot.add_sticker_to_set(user_id=message.from_user.id, name=stickerset,
                                        png_sticker=sticker.file_id, emojis=default_emoji)
     sticker_set = await bot.get_sticker_set(name=stickerset)
     sticker = sticker_set.stickers[-1].file_id
-    db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker, "text": text})
+    res = db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker, "stickerset": stickerset, "text": text})
 
-    #markup = types.InlineKeyboardMarkup(row_width=2)
-    #markup.row(
-    #    types.InlineKeyboardButton('DEL', callback_data=cb_stickers.new(sticker=sticker, action='del')),
-    #    types.InlineKeyboardButton('EDIT', callback_data=cb_stickers.new(sticker=sticker, action='edit'))
-    #)
+    markup = types.InlineKeyboardMarkup(row_width=2)
 
-    #await message.answer_sticker(sticker, reply_markup=markup)
-    await message.answer_sticker(sticker)
+    markup.row(
+        types.InlineKeyboardButton('DEL', callback_data=cb_stickers.new(id=res.inserted_id, action='del')),
+        types.InlineKeyboardButton('EDIT', callback_data=cb_stickers.new(id=res.inserted_id, action='edit'))
+    )
+
+    await message.answer_sticker(sticker, reply_markup=markup)
 
 
 @dp.callback_query_handler(cb_stickers.filter(action='del'))
 async def sticker_del(query: types.CallbackQuery, callback_data: typing.Dict[str, str]):
-    await query.message.reply('edit sticker: ' + callback_data['sticker'])
+    sticker = db.stickers.find_one({'_id': ObjectId(callback_data['id'])})
+
+    await bot.delete_sticker_from_set(sticker['sticker'])
+    await query.message.delete()
+    return await query.answer('Sticker deleted')
 
 
 @dp.callback_query_handler(cb_stickers.filter(action='edit'))
-async def sticker_edit(query: types.CallbackQuery, callback_data: typing.Dict[str, str]):
-    await query.message.reply('delete sticker: ' + callback_data['sticker'])
+async def sticker_edit(query: types.CallbackQuery, callback_data: typing.Dict[str, str], state: FSMContext):
+    sticker = db.stickers.find_one({'_id': ObjectId(callback_data['id'])})
+    text = html.escape(sticker['text'])
+
+    await query.message.reply('<b>Текст на стикере:</b>\n <code>' + text +
+                              "</code>\n <b>Введите новый текст или /cancel для отмены</b>", parse_mode="HTML")
+
+    await States.editText.set()
+    await state.update_data(id=callback_data['id'])
+
+
+@dp.message_handler(state='*', commands='cancel')
+async def cancel_handler(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+
+    await state.finish()
+    await message.reply("Отмена.")
+
+
+@dp.message_handler(state=States.editText)
+async def sticker_editing(message: types.Message, state: FSMContext):
+    text = html.escape(message.text)
+    data = await state.get_data()
+    sticker_id = data.get("id")
+    db.stickers.update_one({"_id": ObjectId(sticker_id)}, {"$set": {"text": text}})
+
+    await message.answer(f"Текст для стикера сохранен:\n <code>{text}</code>", parse_mode="HTML")
+    await state.finish()
 
 
 @dp.message_handler(commands=['new'])
@@ -107,7 +154,8 @@ async def create_stickerset(message: types.Message):
         file = types.input_file.InputFile('./download/logo.png')
         sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
         try:
-            await bot.create_new_sticker_set(message.from_user.id, name, title, emojis=default_emoji, png_sticker=sticker.file_id)
+            await bot.create_new_sticker_set(message.from_user.id, name, title, emojis=default_emoji,
+                                             png_sticker=sticker.file_id)
         except Exception as e:
             return await message.reply(str(e))
 
@@ -149,6 +197,27 @@ async def test_function(message: types.Message):
     await message.reply("Меню убрано", reply_markup=markup)
 
 
+@dp.inline_handler()
+async def inline_request(inline_query: InlineQuery):
+    text = inline_query.query
+    if not text:
+        return
+    # select stickersets, that user is using
+    stickersets = db.uses.find({'user_id': inline_query.from_user.id})
+    stickersets = [s['stickerset'] for s in stickersets]
+    stickers = db.stickers.find({'stickerset': {'$in': stickersets}, '$text': {'$search': text}})
+
+    items = []
+    for sticker in stickers:
+        item = InlineQueryResultCachedSticker(
+            id=str(sticker['_id']),
+            sticker_file_id=sticker['sticker'],
+        )
+        items.append(item)
+
+    await bot.answer_inline_query(inline_query.id, results=items, cache_time=1)
+
+
 def thumbnail_img(img):
     max_size = 512
     (h, w, _) = img.shape
@@ -178,7 +247,7 @@ def ocr_img(img):
     if average < 100:
         gray = cv2.bitwise_not(gray)
 
-    text = pytesseract.image_to_string(gray, lang='rus')
+    text = pytesseract.image_to_string(gray, lang='rus').strip()
     return text
 
 
