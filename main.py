@@ -1,5 +1,8 @@
 import logging
 import typing
+
+import aiogram.utils.exceptions
+
 import settings
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils.callback_data import CallbackData
@@ -32,6 +35,8 @@ dp = Dispatcher(bot, storage=storage)
 
 class States(StatesGroup):
     editText = State()
+    useStickerPack = State()
+    createStickerPack = State()
 
 
 client = pymongo.MongoClient(host=settings.mongodb['host'], port=settings.mongodb['port'],
@@ -178,22 +183,39 @@ async def use_stickerset(message: types.Message):
     if len(params) > 1:
         stickerset_name = params[1]
 
-        if not stickerset_name.endswith(bot_postfix):
-            return await message.reply(f"Ошибка: стикерпак должен заканчиваться на \"{bot_postfix}\"")
-
-        sticker_set = await bot.get_sticker_set(name=stickerset_name)
-
-        if not sticker_set:
-            return await message.reply("Ошибка: стикерпак не найден")
-
-        try:
-            db.uses.insert_one({"user_id": message.from_user.id, "stickerset": stickerset_name})
-        except pymongo.errors.DuplicateKeyError:
-            await message.reply("Вами уже был подключен стикерпак: http://t.me/addstickers/" + stickerset_name)
-        else:
-            await message.reply("Вы подключили стикерпак: http://t.me/addstickers/" + stickerset_name)
+        await use_stickerset_ex(message, stickerset_name)
     else:
-        await message.reply("TODO: вывод кнопок для использования стикерпака") #TODO
+        await message.reply(f"Введите название стикерпака, который хотите использовать "
+                            f"(Оно должно заканчиваться на {bot_postfix})")
+        await States.useStickerPack.set()
+
+
+@dp.message_handler(state=States.useStickerPack)
+async def use_stickerset_fsm(message: types.Message, state: FSMContext):
+    stickerset_name = message.text
+    if await use_stickerset_ex(message, message.text):
+        await state.finish()
+
+
+async def use_stickerset_ex(message: types.Message, stickerset_name: str):
+    if not stickerset_name.endswith(bot_postfix):
+        await message.reply(f"Ошибка: стикерпак должен заканчиваться на \"{bot_postfix}\"")
+        return False
+
+    try:
+        sticker_set = await bot.get_sticker_set(name=stickerset_name)
+    except aiogram.utils.exceptions.InvalidStickersSet:
+        await message.reply("Ошибка: стикерпак не найден")
+        return False
+
+    try:
+        db.uses.insert_one({"user_id": message.from_user.id, "stickerset": stickerset_name})
+    except pymongo.errors.DuplicateKeyError:
+        await message.reply("Вами уже был подключен стикерпак: http://t.me/addstickers/" + stickerset_name)
+        return False
+
+    await message.reply("Вы подключили стикерпак: http://t.me/addstickers/" + stickerset_name)
+    return True
 
 
 @dp.message_handler(commands=['test'])
