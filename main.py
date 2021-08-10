@@ -16,6 +16,7 @@ import pytesseract
 import pymongo, pymongo.errors
 from bson.objectid import ObjectId
 import html
+import re
 import hashlib
 
 
@@ -73,8 +74,10 @@ async def photo_recieved(message: types.Message):
     await photo.download(bio)
     file_bytes = np.asarray(bytearray(bio.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
-    text = ocr_img(img)
-    print(text)
+    if message.caption:
+        text = message.caption
+    else:
+        text = ocr_img(img)
     thumb = thumbnail_img(img)
     is_success, buffer = cv2.imencode(".webp", thumb, [cv2.IMWRITE_WEBP_QUALITY, 100])
     thumb = BytesIO(buffer)
@@ -97,8 +100,8 @@ async def photo_recieved(message: types.Message):
         types.InlineKeyboardButton('EDIT', callback_data=cb_stickers.new(id=res.inserted_id, action='edit'))
     )
 
-    await message.answer_sticker(sticker, reply_markup=markup)
-    await message.answer(text or 'No text recognized') #TMP
+    msg = await message.answer_sticker(sticker, reply_markup=markup)
+    await msg.reply('<b>Текст:</b>\n <code>' + text + "</code>", parse_mode="HTML")
 
 
 @dp.callback_query_handler(cb_stickers.filter(action='del'))
@@ -107,6 +110,7 @@ async def sticker_del(query: types.CallbackQuery, callback_data: typing.Dict[str
 
     await bot.delete_sticker_from_set(sticker['sticker'])
     await query.message.delete()
+    db.stickers.delete_one({'_id': ObjectId(callback_data['id'])})
     return await query.answer('Sticker deleted')
 
 
@@ -223,7 +227,7 @@ async def delllaststicker_function(message: types.Message):
     await bot.delete_sticker_from_set(sticker)
 
     res = db.stickers.delete_one({'sticker_unique_id': sticker_unique_id})
-    print("Deleted db records: " + res.deleted_count)
+    print("Deleted db records: ", res.deleted_count)
 
     return await message.answer("Sticker deleted")
 
@@ -279,6 +283,10 @@ def ocr_img(img):
         gray = cv2.bitwise_not(gray)
 
     text = pytesseract.image_to_string(gray, lang='rus').strip()
+    text.replace("\n", " ")
+    regex = r"[^A-Za-zА-Яа-я]+"
+    text = re.sub(regex, " ", text)
+    text = re.sub(r'\s\s+', ' ', text)
     return text
 
 
