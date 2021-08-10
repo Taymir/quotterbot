@@ -86,7 +86,9 @@ async def photo_recieved(message: types.Message):
                                        png_sticker=sticker.file_id, emojis=default_emoji)
     sticker_set = await bot.get_sticker_set(name=stickerset)
     sticker = sticker_set.stickers[-1].file_id
-    res = db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker, "stickerset": stickerset, "text": text})
+    sticker_unique_id = sticker_set.stickers[-1].file_unique_id
+    res = db.stickers.insert_one({"user_id": message.from_user.id, "sticker": sticker,
+                                  'sticker_unique_id': sticker_unique_id, "stickerset": stickerset, "text": text})
 
     markup = types.InlineKeyboardMarkup(row_width=2)
 
@@ -96,6 +98,7 @@ async def photo_recieved(message: types.Message):
     )
 
     await message.answer_sticker(sticker, reply_markup=markup)
+    await message.answer(text or 'No text recognized') #TMP
 
 
 @dp.callback_query_handler(cb_stickers.filter(action='del'))
@@ -162,7 +165,7 @@ async def create_stickerset(message: types.Message):
         db.users.update_one({"user_id": message.from_user.id}, {"$set": {"stickerset": name}})
         await message.reply("http://t.me/addstickers/" + name)
     else:
-        await message.reply("TODO: вывод кнопок для создания стикерпака")
+        await message.reply("TODO: вывод кнопок для создания стикерпака") #TODO
 
 
 @dp.message_handler(commands=['use'])
@@ -176,6 +179,9 @@ async def use_stickerset(message: types.Message):
 
         sticker_set = await bot.get_sticker_set(name=stickerset_name)
 
+        if not sticker_set:
+            return await message.reply("Ошибка: стикерпак не найден")
+
         try:
             db.uses.insert_one({"user_id": message.from_user.id, "stickerset": stickerset_name})
         except pymongo.errors.DuplicateKeyError:
@@ -183,7 +189,7 @@ async def use_stickerset(message: types.Message):
         else:
             await message.reply("Вы подключили стикерпак: http://t.me/addstickers/" + stickerset_name)
     else:
-        await message.reply("TODO: вывод кнопок для использования стикерпака")
+        await message.reply("TODO: вывод кнопок для использования стикерпака") #TODO
 
 
 @dp.message_handler(commands=['test'])
@@ -195,6 +201,31 @@ async def test_function(message: types.Message):
     ])
     markup = types.reply_keyboard.ReplyKeyboardRemove()
     await message.reply("Меню убрано", reply_markup=markup)
+
+
+@dp.message_handler(commands=['del_last_sticker'])
+async def delllaststicker_function(message: types.Message):
+    params = message.text.split(" ")
+    if len(params) > 1:
+        stickerset_name = params[1]
+    else:
+        return await message.answer("No stickerset specified!")
+
+    try:
+        stickerset = await bot.get_sticker_set(stickerset_name)
+    except Exception as e:
+        return await message.answer(str(e))
+
+    if len(stickerset.stickers) < 1:
+        return await message.answer("No stickers left")
+    sticker = stickerset.stickers[-1].file_id
+    sticker_unique_id = stickerset.stickers[-1].file_unique_id
+    await bot.delete_sticker_from_set(sticker)
+
+    res = db.stickers.delete_one({'sticker_unique_id': sticker_unique_id})
+    print("Deleted db records: " + res.deleted_count)
+
+    return await message.answer("Sticker deleted")
 
 
 @dp.inline_handler()
