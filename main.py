@@ -20,7 +20,6 @@ import pymongo, pymongo.errors
 from bson.objectid import ObjectId
 import html
 import re
-import hashlib
 
 
 bot_name = "quotterbot"
@@ -36,7 +35,8 @@ dp = Dispatcher(bot, storage=storage)
 class States(StatesGroup):
     editText = State()
     useStickerPack = State()
-    createStickerPack = State()
+    createStickerPack1 = State()
+    createStickerPack2 = State()
 
 
 client = pymongo.MongoClient(host=settings.mongodb['host'], port=settings.mongodb['port'],
@@ -58,7 +58,15 @@ async def send_welcome(message: types.Message):
                              'stickerset': None
                              })
 
-    await message.reply("Welcome to quotterBot!")
+    await help_command(message)
+
+
+@dp.message_handler(commands=['help'])
+async def help_command(message: types.Message):
+    await message.reply("Добро пожаловать! \n"
+                        f"Подключите стикерсет для использования коммандой /use [название стикерсета_{bot_postfix}] или"
+                        "создайте свой стикерсет коммандой /create."
+                        f"После этого вы сможете использовать тег @{bot_name} для поиска по тексту в стикерах")
 
 
 @dp.message_handler(content_types=['photo', 'document', 'sticker'])
@@ -154,6 +162,11 @@ async def sticker_editing(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands=['new'])
 async def create_stickerset(message: types.Message):
+    user = db.users.find_one({"user_id": message.from_user.id})
+    if user['stickerset']:
+        return await message.answer("Ошибка: вы уже создали стикерсет. На данный момент бот может работать"
+                                    " только с одним активным стикерсетом.")
+
     params = message.text.split(" ")
     if len(params) > 1:
         name = params[1]
@@ -163,18 +176,52 @@ async def create_stickerset(message: types.Message):
         if len(params) > 2:
             title = params[2]
 
-        file = types.input_file.InputFile('./download/logo.png')
-        sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
-        try:
-            await bot.create_new_sticker_set(message.from_user.id, name, title, emojis=default_emoji,
-                                             png_sticker=sticker.file_id)
-        except Exception as e:
-            return await message.reply(str(e))
-
-        db.users.update_one({"user_id": message.from_user.id}, {"$set": {"stickerset": name}})
-        await message.reply("http://t.me/addstickers/" + name)
+        await create_stickerset_ex(message, name, title)
     else:
-        await message.reply("TODO: вывод кнопок для создания стикерпака") #TODO
+        await message.reply("Введите название стикерпака, который хотите создать ")
+        #                    f"(Оно должно заканчиваться на {bot_postfix})")
+        await States.createStickerPack1.set()
+
+
+@dp.message_handler(state=States.createStickerPack1)
+async def create_stickerset1_fsm(message: types.Message, state: FSMContext):
+    title = message.text
+    async with state.proxy() as data:
+        data['title'] = title
+    await message.reply("Введите короткий адрес стикерпака "
+                        f"(Он должен заканчиваться на {bot_postfix})")
+    await States.createStickerPack2.set()
+
+
+@dp.message_handler(state=States.createStickerPack2)
+async def create_stickerset2_fsm(message: types.Message, state: FSMContext):
+    name = message.text
+    if not name.endswith(bot_postfix):
+        return await message.answer(f"Ошибка: Название стикерпака должно заканчиваться на {bot_postfix}")
+    async with state.proxy() as data:
+        title = data['title']
+
+    if await create_stickerset_ex(message, name, title):
+        await state.finish()
+
+
+async def create_stickerset_ex(message: types.Message, name, title):
+    file = types.input_file.InputFile('./download/logo.png')
+    sticker = await bot.upload_sticker_file(user_id=message.from_user.id, png_sticker=file)
+    try:
+        await bot.create_new_sticker_set(message.from_user.id, name, title, emojis=default_emoji,
+                                         png_sticker=sticker.file_id)
+    except Exception as e:
+        err_text = str(e)
+        if err_text == "Sticker set name is already occupied":
+            err_text = "Такой адрес стикерпака уже занят, попробуйте другой"
+        await message.reply(str(e))
+        return False
+
+    db.users.update_one({"user_id": message.from_user.id}, {"$set": {"stickerset": name}})
+    db.uses.insert_one({"user_id": message.from_user.id, "stickerset": name})
+    await message.reply("http://t.me/addstickers/" + name)
+    return True
 
 
 @dp.message_handler(commands=['use'])
@@ -218,24 +265,13 @@ async def use_stickerset_ex(message: types.Message, stickerset_name: str):
     return True
 
 
-@dp.message_handler(commands=['test'])
-async def test_function(message: types.Message):
-    markup = types.reply_keyboard.ReplyKeyboardMarkup([
-        [types.reply_keyboard.KeyboardButton("Option 1")],
-        [types.reply_keyboard.KeyboardButton("Option 2")],
-        [types.reply_keyboard.KeyboardButton("Option 3")]
-    ])
-    markup = types.reply_keyboard.ReplyKeyboardRemove()
-    await message.reply("Меню убрано", reply_markup=markup)
-
-
-@dp.message_handler(commands=['del_last_sticker'])
-async def delllaststicker_function(message: types.Message):
+@dp.message_handler(commands=['del'])
+async def del_last_sticker_function(message: types.Message):
     params = message.text.split(" ")
     if len(params) > 1:
         stickerset_name = params[1]
     else:
-        return await message.answer("No stickerset specified!")
+        return await message.answer("Отсутствует стикерпак")
 
     try:
         stickerset = await bot.get_sticker_set(stickerset_name)
@@ -243,15 +279,14 @@ async def delllaststicker_function(message: types.Message):
         return await message.answer(str(e))
 
     if len(stickerset.stickers) < 1:
-        return await message.answer("No stickers left")
+        return await message.answer("Стикеров не осталось")
     sticker = stickerset.stickers[-1].file_id
     sticker_unique_id = stickerset.stickers[-1].file_unique_id
     await bot.delete_sticker_from_set(sticker)
 
     res = db.stickers.delete_one({'sticker_unique_id': sticker_unique_id})
-    print("Deleted db records: ", res.deleted_count)
 
-    return await message.answer("Sticker deleted")
+    return await message.answer("Последний стикер удален")
 
 
 @dp.inline_handler()
